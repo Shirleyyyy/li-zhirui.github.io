@@ -104,21 +104,21 @@ class App {
   ArchiveSearcher searcher = ... ;  // init searcher
   void showSearch(final String type, final String target) throws InterruptedException {
     Future<String> resultFuture  = executor.submit(() -> {
-      Future<String> serviceFuture = 
+      Future<String> serviceFuture =  // future for fetching searcher service
         executor.submit(() -> serviceFetcher.fetch(type));
-      Future<String> configFuture = 
+      Future<String> configFuture =   // future for reading config
         executor.submit(() -> readConfig());
-      try {
-        String service = serviceFuture.get();  // fetch service
+      try {  // handle failure of fetching service
+        String service = serviceFuture.get();  // get service
         String config = "";
-        try {
+        try {  // nested try-catch block, for reading config
           config = configFuture.get();  // get config
         } catch (ExecutionException ex) {
           config = getDefaultConfig();  // if fail to read config, use default
         }
         return searcher.search(service, config, target);  // search
       } catch (ExecutionException ex) {
-        throw ex.getCause();  // if fail to get service, throw exception
+        throw ex.getCause();  // if fail to fetch service, throw exception
       }
     });
     displayOtherThings();  // do other things while searching
@@ -151,15 +151,15 @@ trait Future[T] {
 使用的时候大概是这样：
 
 ```scala
-future.onComplete(res => consume(res));
+future.onComplete(res => consume(res))
 ```
 
-使用回调函数之后，在 `onComplete` 处就不会阻塞线程，当 future 所代理的值被计算出来后，通过 `onComplete` 注册的回调函数就会被调用，从而执行所需的代码。但很快可以发现，由于整个过程是异步的，所以这样无法直接使用 `try-catch` 来捕获异常，如前所述，Java 的 `Future` 的 `get` 方法的完整声明其实是这样的：
+使用回调函数之后，在 `onComplete` 处就不会阻塞线程，当 future 所代理的值被计算出来后，通过 `onComplete` 注册的回调函数就会被调用，从而执行所需的代码。但很快可以发现，由于整个过程是异步的，所以这样无法直接使用 try-catch 块来捕获异常，如前所述，Java 的 `Future` 的 `get` 方法的完整声明其实是这样的：
 
 ```java 
-V get() throws InterruptedException, ExecutionException
+V get() throws InterruptedException, ExecutionException;
 V get(long timeout, TimeUnit unit)
-    throws InterruptedException, ExecutionException, TimeoutException
+    throws InterruptedException, ExecutionException, TimeoutException;
 ```
 
 所以，`get` 的声明其实不是 `() => T` 而是 `() => Try[T]`，对应 `get` 改为异步后的 `onComplete` 不应该是 `T => Unit`，而应该是 `Try[T] => Unit`。
@@ -190,9 +190,9 @@ class App {
         executor.submit { _ => serviceFetcher.fetch(type) }
       val configFuture: Future[String] = 
         executor.submit { _ => readConfig() }
-      serviceFuture.onComplete {
+      serviceFuture.onComplete {  // callback for fetching service
         case Success(service) =>
-          configFuture.onComplete {
+          configFuture.onComplete {  // nested callback for reading config
             case Success(config) => 
               searcher.search(service, config, target)
             case Failure(thw) =>  // if fail to read config, use default
@@ -203,8 +203,8 @@ class App {
     }
     resultFuture.onComplete {
       case Success(result) => 
-        val textForDisplay: String = render(result)  // render result
-        displayText(textForDisplay)  // display result
+        val textForDisplay: String = render(result)
+        displayText(textForDisplay)
       case Failure(thw) => cleanup()
     }
     displayOtherThings()  // do other things while searching
@@ -280,7 +280,7 @@ trait Future[T] {
 }
 ```
 
-这样配合 Scala 的 for-comprehension，就可以这样写：
+`flatMap` 方法会根据原 future 的计算结果来产生一个新的 future，如果原 future 成功计算出了结果，那么新的 future 就是将 `f` 作用于原 future 所代理的值上所得出的 future，如果原 future 出现了异常导致失败，或者 `f` 的调用过程出现异常，又或者新的 future 自身出现了异常，那么新的 future 将会失败。有了这个组合子，配合 Scala 的 for-comprehension，就可以这样写：
 
 ```scala 
 val resultFuture = for {
@@ -295,7 +295,7 @@ resultFuture.map(render).onComplete {
 }
 ```
 
-即便不懂 Scala 的语法，上面这段代码的目的也非常清晰，先取得搜索服务提供者，并命名为 `service`，取得配置，并命名为 `config`，然后通过这两个信息进行搜索。之后将搜索结果进行渲染，再注册回调函数，在整个过程完成后进行展示。
+这段代码将被翻译为对 `flatMap` 和 `map` 的调用，但即便不懂 Scala 的语法，上面这段代码的目的也非常清晰，先取得搜索服务提供者，并命名为 `service`，取得配置，并命名为 `config`，然后通过这两个信息进行搜索。之后将搜索结果进行渲染，再注册回调函数，在整个过程完成后进行展示。
 
 上面的代码没有进行错误处理，除了 `map` 和 `flatMap` 之外，Scala 的 `Future` 还提供了更多的组合子，例如用于从异常中恢复的 `recover`，用于筛选结果的 `filter`，用于进行副作用处理的 `foreach` 等 [^scala-doc-future] [^scala-api-future]。配合之下，前面的代码将变成这样：
 
@@ -340,7 +340,7 @@ val displayTextFuture = Future { serviceFetcher.fetch(type) } flatMap {
 }
 ```
 
-这样的嵌套处理非常难读难写，所以，Java 8 设计了另外一套 API，在 `CompletableFuture` 中 [^java-completable-future]，举例而言：
+由于 Java 没有类似 for-comprehension 的语法，如果直接照搬 Scala 的 API 设计，那就必须在 Java 的代码中写这样的嵌套处理了。这样的嵌套处理非常难读难写，所以，Java 8 设计了另外一套 API，实现在 `CompletableFuture` 中 [^java-completable-future]，举例而言：
 
 [^java-completable-future]: [CompletableFuture - JavaSE 8 References](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/CompletableFuture.html)
 
@@ -402,18 +402,18 @@ class CompletableFuture<T> extends Object
 尤其是在配合 Java 8 的 Lambda 表达式之后，写起来也是相当清晰的，例如之前的代码可以写成：
 
 ```java 
-CompletableFuture serviceFuture = 
+CompletableFuture serviceFuture =  // fetch searcher service
   CompletableFuture.supplyAsync(() -> serviceFetcher.fetch(type));
   
-CompletableFuture configFuture = 
+CompletableFuture configFuture =  // read config
   CompletableFuture
     .supplyAsync(() -> readConfig())
-    .handleAsync((config, ex) -> {
+    .handleAsync((config, ex) -> {  // if fail to read config, use default
       if (ex == null) return config;
       else return getDefaultConfig();
     });
     
-CompletableFuture textForDisplayFuture = 
+CompletableFuture textForDisplayFuture =  // search and render
   serviceFuture
     .thenCombineAsync(configFuture, 
        (service, config) -> searcher.search(service, config, target))
@@ -427,6 +427,6 @@ displayOtherThings();
 
 这段 Java 代码虽然仍然没有 Scala 版本的代码优雅，但是在 Java 的语法局限下，这个已经是一个比较好的处理了。关键在于这个版本也做到了异步回调避免阻塞主线程的情况下，加强了 future 间的组合性，避免出现最初版本的难读代码。
 
-总之，在 Java 8 之后，应该使用新的 API 来操作 future，以便能更加简便地处理并发和异步代码。另外，对于 API 设计而言，要尽可能加强组件的可组合性，将无法组合的部分抽离，只有在最后才调用。
+总之，在 Java 8 之后，应该使用新的 API 来操作 future，以便能更加简便地处理并发和异步代码。另外，对于 API 设计而言，要尽可能加强组件的可组合性，将无法组合的部分抽离，只有在最后才调用，以使得 API 更加易用。
 
 ## 参考
