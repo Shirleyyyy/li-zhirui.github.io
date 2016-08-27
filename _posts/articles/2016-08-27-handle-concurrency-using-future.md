@@ -5,7 +5,7 @@ excerpt: Future 的概念，Future 的使用，Future 的组合
 categories: articles
 author: ktn
 date: 2016-08-27
-modified: 2016-08-27
+modified: 2016-08-28
 tags:
   - Asynchrony
   - Concurrency
@@ -314,7 +314,7 @@ class App {
       service <- Future { serviceFetcher.fetch(type) }
       config <- (Future { readConfig() }).recover(_ => getDefaultConfig)
       result <- Future { searcher.search(service, config, target) }
-    } yield rander(result)
+    } yield render(result)
     
     displayTextFuture.onComplete {
       case Success(textForDisplay) => displayText(textForDisplay)
@@ -334,7 +334,7 @@ class App {
 val displayTextFuture = Future { serviceFetcher.fetch(type) } flatMap { 
   service => (Future { readConfig() }).recover(_ => getDefaultConfig) flatMap {
     config => Future { searcher.search(service, config, target) } map {
-      result => rander(result)
+      result => render(result)
     }
   }
 }
@@ -399,34 +399,74 @@ class CompletableFuture<T> extends Object
 }
 ```
 
-尤其是在配合 Java 8 的 Lambda 表达式之后，写起来也是相当清晰的，例如之前的代码可以写成：
+这一套 API 其实光看方法签名就能大概猜到它们的作用了，例如 `thenApply` 和 `thenApplyAsync` 就相当于 `map`，`whenComplete` 和 `whenCompleteAsync` 就相当于 `onComplete` 等。在配合 Java 8 的 Lambda 表达式之后，使用时写出的代码也是相当清晰的，例如之前的代码可以写成：
 
 ```java 
-CompletableFuture serviceFuture =  // fetch searcher service
-  CompletableFuture.supplyAsync(() -> serviceFetcher.fetch(type));
+CompletableFuture<String> serviceFuture =  // fetch searcher service
+  CompletableFuture.supplyAsync(  // use supplyAsync to construct future
+    () -> serviceFetcher.fetch(type));  
   
-CompletableFuture configFuture =  // read config
+CompletableFuture<String> configFuture =  // read config
   CompletableFuture
     .supplyAsync(() -> readConfig())
-    .handleAsync((config, ex) -> {  // if fail to read config, use default
+    .handleAsync((config, ex) -> {  // use handleAsync to handle result
       if (ex == null) return config;
-      else return getDefaultConfig();
+      else return getDefaultConfig();  // if fail to read config, use default
     });
     
-CompletableFuture textForDisplayFuture =  // search and render
+CompletableFuture<String> textForDisplayFuture =  // search and render
   serviceFuture
-    .thenCombineAsync(configFuture, 
-       (service, config) -> searcher.search(service, config, target))
-    .thenApplyAsync((result) -> rander(result));
+    .thenCombineAsync(  // use thenCombineAsync to combine result
+      configFuture, 
+      (service, config) -> searcher.search(service, config, target))
+    .thenApplyAsync((result) -> render(result));  // render result
       
-textForDisplayFuture.whenCompleteAsync((text, ex) -> 
-  { if (ex == null) cleanup(); else displayText(text); });
+textForDisplayFuture.whenCompleteAsync((text, ex) -> { 
+  if (ex == null) cleanup(); else displayText(text); 
+});
   
 displayOtherThings();
 ```
 
-这段 Java 代码虽然仍然没有 Scala 版本的代码优雅，但是在 Java 的语法局限下，这个已经是一个比较好的处理了。关键在于这个版本也做到了异步回调避免阻塞主线程的情况下，加强了 future 间的组合性，避免出现最初版本的难读代码。
+注意到在这套 API 中，为了避免使用类似 `flatMap` 这样的函数导致嵌套调用，Java 使用 `thenCombine` 和 `thenCombineAsync` 来承担 Scala 中 `flatMap` 的作用，处理上下文相关的场景，但这个组合子并没有 `flatMap` 那么强大。为了说明这个问题，考虑一个计算依赖于三个 future 的计算结果的场景。假设现在需要用 a，b，c 三个字符串构建一个新的字符串，而这三个字符串分别由 `futureA`，`futureB`，`futureC` 代理，那么可能就要写出如下的代码：
 
-总之，在 Java 8 之后，应该使用新的 API 来操作 future，以便能更加简便地处理并发和异步代码。另外，对于 API 设计而言，要尽可能加强组件的可组合性，将无法组合的部分抽离，只有在最后才调用，以使得 API 更加易用。
+```java
+class Pair<X, Y> {
+  public X x;
+  public Y y;
+  public Pair(X x, Y y) {
+    this.x = x; this.y = y;
+  }
+}
+CompletableFuture<String> stringFuture =
+  futureA
+    .thenCombineAsync(futureB, (a, b) -> new Pair<String, String>(a, b))
+    .thenCombineAsync(futureC, (pair, b) -> buildString(pair.x, pair.y, c));
+```
+
+而 Scala 只需要这样写：
+
+```scala 
+val stringFuture = for {
+  a <- futureA
+  b <- futureB
+  c <- futureC
+} yield buildString(a, b, c)
+```
+
+显然，这个组合子只能方便地处理两个 future 的结合，没有 `flatMap` 强大，事实上，可以用 `flatMap` 来很容易地实现 `thenCombine`，一般称为 `map2`：
+
+```scala 
+trait Future[T] {
+  def map2(other: Future[U], f: (T, U) => V): Future[V] = for {
+    t <- this
+    u <- other
+  } yield f(t, u)
+}
+```
+
+虽然 Java 的这个实现没有 Scala 版本的代码优雅，但是在大多数情况下也够用，尤其是在受到 Java 的语法局限的情况下，这个已经是一个比较好的处理了。从获取搜索结果并显示的例子中可以看出，使用这套 API 的关键优点在于这个版本的代码也做到了在异步回调避免阻塞主线程的情况下，加强了 future 间的组合性，避免出现最初版本的难读代码。
+
+总之，在 Java 8 之后，应该使用新的 API 来操作 future，以便能更加简便地处理并发和异步代码。另外，对于 API 设计而言，要尽可能加强组件与组件之间的可组合性，将无法组合的部分抽离，只有在最后才调用，以使得 API 更加易用。
 
 ## 参考
