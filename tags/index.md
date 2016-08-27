@@ -3,10 +3,6 @@ layout: page
 title: Tag Index
 excerpt: "An archive of posts sorted by tag."
 search_omit: true
-image:
-  feature: tags-bg.jpeg
-  credit: Private Clinic
-  creditlink: http://www.lifeofpix.com/photographer/private-clinic/
 ---
 
 {% capture site_tags %}{% for tag in site.tags %}{{ tag | first }}{% unless forloop.last %},{% endunless %}{% endfor %}{% endcapture %}
