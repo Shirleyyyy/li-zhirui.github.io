@@ -250,7 +250,7 @@ class App {
 
 [^callback-hell]: [Callback Hell - A guide to writing asynchronous JavaScript programs](http://callbackhell.com/)
 
-首先，一个常用的组合子就是 `map` 了：
+首先，一个常用的组合子就是 `map` 了（真实 API 会有隐式传递的 `ExecutionContext` 参数，这里省去，不影响表意）：
 
 ```scala 
 trait Future[T] {
@@ -371,7 +371,7 @@ class CompletableFuture<T> extends Object
 }
 ```
 
-正如之前的在 [协变、逆变与不变](../covariant-and-contravariant) 一文中提到的一样，Java 的型变是在使用的地方进行限制的，所以这里的几个方法签名都非常难看，但对于使用者来说，其实并不太需要理会复杂的声明，将上面的声明看作这样就可以了：
+正如之前的在 [协变、逆变与不变](/articles/covariant-and-contravariant) 一文中提到的一样，Java 的型变是在使用的地方进行限制的，所以这里的几个方法签名都非常难看，但对于使用者来说，其实并不太需要理会复杂的声明，将上面的声明看作这样就可以了：
 
 ```java
 class CompletableFuture<T> extends Object 
